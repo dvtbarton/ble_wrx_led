@@ -6,6 +6,9 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 
+#ifndef BLE_WRX_LED_H
+#define BLE_WRX_LED_H
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,9 +31,9 @@ enum
 {
     IDX_SVC,
     
-    IDX_BOARDLED_CHAR,
-    IDX_BOARDLED_CHAR_VAL,
-    IDX_BOARDLED_CHAR_CFG,
+    IDX_RGB_CHAR,
+    IDX_RGB_CHAR_VAL,
+    IDX_RGB_CHAR_CFG,
 
     IDX_CHAR_B,
     IDX_CHAR_VAL_B,
@@ -43,3 +46,5 @@ enum
 
     LED_IDX_NUM,
 };
+
+#endif

@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_bt.h"
+#include <math.h>
 
 #include "esp_gap_ble_api.h"
 #include "esp_gatts_api.h"
@@ -21,9 +22,7 @@
 #include "esp_bt_device.h"
 #include "ble_wrx_led.h"
 
-#include "driver/gpio.h"
 #include "driver/ledc.h"
-#include "led_control.h"
 
 /* Can use project configuration menu (idf.py menuconfig) to choose the GPIO to blink,
    or you can edit the following line and set a number here.
@@ -32,93 +31,132 @@
 // The built-in LED to GPIO2
 #define BLINK_GPIO CONFIG_BLINK_GPIO
 
-#define GATTS_TABLE_TAG "ble_wrx_led" /* name of generic attribute server table */
+// BLE defines
+  #define GATTS_TABLE_TAG "ble_wrx_led" /* name of generic attribute server table */
 
-#define LED_PROFILE_NUMBER            1
-#define LED_PROFILE_APP_IDX           0
-#define ESP_LED_APP_ID                0x55
-#define DEVICE_NAME                   "T-WRX LED"
-#define LED_SERVICE_INSTANCE_ID       0
+  #define LED_PROFILE_NUMBER            1
+  #define LED_PROFILE_APP_IDX           0
+  #define ESP_LED_APP_ID                0x55
+  #define DEVICE_NAME                   "T-WRX LED"
+  #define LED_SERVICE_INSTANCE_ID       0
 
-/* The max length of characteristic value. When the gatt client write or prepare write, 
-*  the data length must be less than GATTS_EXAMPLE_CHAR_VAL_LEN_MAX. 
-*/
-#define GATTS_EXAMPLE_CHAR_VAL_LEN_MAX 500
-#define LONG_CHAR_VAL_LEN           500
-#define SHORT_CHAR_VAL_LEN          10
-#define GATTS_NOTIFY_FIRST_PACKET_LEN_MAX 20
+  /* The max length of characteristic value. When the gatt client write or prepare write, 
+  *  the data length must be less than GATTS_EXAMPLE_CHAR_VAL_LEN_MAX. 
+  */
+  #define GATTS_EXAMPLE_CHAR_VAL_LEN_MAX 500
+  #define LONG_CHAR_VAL_LEN           500
+  #define SHORT_CHAR_VAL_LEN          10
+  #define GATTS_NOTIFY_FIRST_PACKET_LEN_MAX 20
 
-#define PREPARE_BUF_MAX_SIZE        1024
-#define CHAR_DECLARATION_SIZE       (sizeof(uint8_t))
+  #define PREPARE_BUF_MAX_SIZE        1024
+  #define CHAR_DECLARATION_SIZE       (sizeof(uint8_t))
 
-#define ADVERTISING_CONFIG_FLAG       (1 << 0)
-#define SCAN_RSP_CONFIG_FLAG          (1 << 1)
+  #define ADVERTISING_CONFIG_FLAG       (1 << 0)
+  #define SCAN_RSP_CONFIG_FLAG          (1 << 1)
 
-static uint8_t adv_config_done = 0;
+  static uint8_t adv_config_done = 0;
 
-static uint16_t led_handle_table[LED_IDX_NUM];
+  static uint16_t led_handle_table[LED_IDX_NUM];
 
-static uint8_t test_manufacturer[3]={'E', 'S', 'P'};
+  static uint8_t test_manufacturer[3]={'E', 'S', 'P'};
 
-static uint8_t security_service_uuid[16] = {
-    /* LSB <--------------------------------------------------------------------------------> MSB */
-    //first uuid, 16bit, [12],[13] is the value
-    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x18, 0x0D, 0x00, 0x00,
-};
+  static uint8_t security_service_uuid[16] = {
+      /* LSB <--------------------------------------------------------------------------------> MSB */
+      //first uuid, 16bit, [12],[13] is the value
+      0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x18, 0x0D, 0x00, 0x00,
+  };
 
-// config advertising data, must be less than 31 bytes
-static esp_ble_adv_data_t led_advertising_config = {
-    .set_scan_rsp = false,
-    .include_name = true,
-    .include_txpower = true,
-    .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
-    .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
-    .appearance = 0x00,
-    .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
-    .p_manufacturer_data =  NULL, //&test_manufacturer[0],
-    .service_data_len = 0,
-    .p_service_data = NULL,
-    .service_uuid_len = sizeof(security_service_uuid),
-    .p_service_uuid = security_service_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
-};
-// config scan response data
-static esp_ble_adv_data_t led_scan_response_config = {
-    .set_scan_rsp = true,
-    .include_name = true,
-    .manufacturer_len = sizeof(test_manufacturer),
-    .p_manufacturer_data = test_manufacturer,
-};
+  // config advertising data, must be less than 31 bytes
+  static esp_ble_adv_data_t led_advertising_config = {
+      .set_scan_rsp = false,
+      .include_name = true,
+      .include_txpower = true,
+      .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
+      .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
+      .appearance = 0x00,
+      .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
+      .p_manufacturer_data =  NULL, //&test_manufacturer[0],
+      .service_data_len = 0,
+      .p_service_data = NULL,
+      .service_uuid_len = sizeof(security_service_uuid),
+      .p_service_uuid = security_service_uuid,
+      .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+  };
+  // config scan response data
+  static esp_ble_adv_data_t led_scan_response_config = {
+      .set_scan_rsp = true,
+      .include_name = true,
+      .manufacturer_len = sizeof(test_manufacturer),
+      .p_manufacturer_data = test_manufacturer,
+  };
 
-static esp_ble_adv_params_t adv_params = {
-    .adv_int_min        = 0x100,
-    .adv_int_max        = 0x100,
-    .adv_type           = ADV_TYPE_IND,
-    .own_addr_type      = BLE_ADDR_TYPE_RANDOM,
-    .channel_map        = ADV_CHNL_ALL,
-    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-};
+  static esp_ble_adv_params_t adv_params = {
+      .adv_int_min        = 0x100,
+      .adv_int_max        = 0x100,
+      .adv_type           = ADV_TYPE_IND,
+      .own_addr_type      = BLE_ADDR_TYPE_RANDOM,
+      .channel_map        = ADV_CHNL_ALL,
+      .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+  };
 
-struct gatts_profile_inst {
-    esp_gatts_cb_t        gatts_cb;
-    uint16_t              gatts_if;
-    uint16_t              app_id;
-    uint16_t              conn_id;
-    uint16_t              service_handle;
-    esp_gatt_srvc_id_t    service_id;
-    uint16_t              char_handle;
-    esp_bt_uuid_t         char_uuid;
-    esp_gatt_perm_t       perm;
-    esp_gatt_char_prop_t  property;
-    uint16_t              descr_handle;
-    esp_bt_uuid_t         descr_uuid;
-};
+  struct gatts_profile_inst {
+      esp_gatts_cb_t        gatts_cb;
+      uint16_t              gatts_if;
+      uint16_t              app_id;
+      uint16_t              conn_id;
+      uint16_t              service_handle;
+      esp_gatt_srvc_id_t    service_id;
+      uint16_t              char_handle;
+      esp_bt_uuid_t         char_uuid;
+      esp_gatt_perm_t       perm;
+      esp_gatt_char_prop_t  property;
+      uint16_t              descr_handle;
+      esp_bt_uuid_t         descr_uuid;
+  };
+//
+
+// LED defines
+  #define LEDC_DUTY_RESOLUTION      LEDC_TIMER_13_BIT
+  #define LEDC_HS_TIMER             LEDC_TIMER_0
+  #define LEDC_HS_MODE              LEDC_HIGH_SPEED_MODE
+  #define LEDC_LS_TIMER             LEDC_TIMER_1
+  #define LEDC_LS_MODE              LEDC_LOW_SPEED_MODE
+
+  #define LEDC_ONBOARD          2 // onboard blue LED
+  #define LEDC_ONBOARD_CHANNEL  LEDC_CHANNEL_0
+  #define LEDC_ONBOARD_IDX      0
+
+  #define LEDC_BLUE             19 // blue
+  #define LEDC_BLUE_CHANNEL     LEDC_CHANNEL_1
+  #define LEDC_BLUE_IDX         1
+
+
+  #define LEDC_RED              4 // red
+  #define LEDC_RED_CHANNEL      LEDC_CHANNEL_2
+  #define LEDC_RED_IDX          2
+
+  #define LEDC_GREEN            5 // green
+  #define LEDC_GREEN_CHANNEL    LEDC_CHANNEL_3
+  #define LEDC_GREEN_IDX        3
+
+  #define LEDC_NUM_CHANNELS         4
+  #define LEDC_DUTY_CYCLE           4000
+  #define LEDC_FADE_TIME            3000
+
+  ledc_channel_config_t ledc_channel[LEDC_NUM_CHANNELS];
+//
 
 //==========================================//
 // FORWARD DECLARATIONS
 //==========================================//
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
                                         esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
+static void led_init(void);
+static void setRedLED(uint32_t colorByte);
+static void setGreenLED(uint32_t colorByte);
+static void setBlueLED(uint32_t colorByte);
+static uint32_t get_duty_cycle(uint32_t colorByte);
+static void run_leds(void);
 
 /* One gatt-based profile one app_id and one gatts_if, this array will store the gatts_if returned by ESP_GATTS_REG_EVT */
 static struct gatts_profile_inst led_profile_table[LED_PROFILE_NUMBER] = {
@@ -136,7 +174,7 @@ static struct gatts_profile_inst led_profile_table[LED_PROFILE_NUMBER] = {
 
 /// Service
 static const uint16_t wrx_led_service       = 0x00FF;
-static const uint16_t CHAR_1_SHORT_WR       = 0xFF01;
+static const uint16_t CHAR_RGB              = 0xFF01;
 static const uint16_t CHAR_2_LONG_WR        = 0xFF02;
 static const uint16_t CHAR_3_SHORT_NOTIFY   = 0xFF03;
 
@@ -147,7 +185,7 @@ static const uint16_t character_client_config_uuid  = ESP_GATT_UUID_CHAR_CLIENT_
 static const uint16_t character_user_description    = ESP_GATT_UUID_CHAR_DESCRIPTION;
 static const uint8_t char_prop_notify               = ESP_GATT_CHAR_PROP_BIT_NOTIFY;
 static const uint8_t char_prop_read_write           = ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_READ;
-static const uint8_t char1_name[]  = "Write_only";
+static const uint8_t char1_name[]  = "RGB LED";
 static const uint8_t char2_name[]  = "Char_2_Long_WR";
 static const uint8_t char3_name[]  = "Char_3_Short_Notify";
 static const uint8_t char_ccc[2]   = {0x00, 0x00};
@@ -172,7 +210,7 @@ static const esp_gatts_attr_db_t gatt_db[LED_IDX_NUM] =
     
     
     /* Characteristic Declaration */
-    [IDX_BOARDLED_CHAR]     =
+    [IDX_RGB_CHAR]     =
     { {ESP_GATT_AUTO_RSP}, 
       { 
         ESP_UUID_LEN_16, 
@@ -185,20 +223,20 @@ static const esp_gatts_attr_db_t gatt_db[LED_IDX_NUM] =
     },
 
     /* Characteristic Value */
-    [IDX_BOARDLED_CHAR_VAL] =
+    [IDX_RGB_CHAR_VAL] =
     { {ESP_GATT_AUTO_RSP}, 
       { 
         ESP_UUID_LEN_16, 
-        (uint8_t *)&CHAR_1_SHORT_WR, 
+        (uint8_t *)&CHAR_RGB, 
         ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-        SHORT_CHAR_VAL_LEN, 
+        LONG_CHAR_VAL_LEN, 
         0, 
         0
       } 
     },
 
     /* Characteristic User Descriptor */
-    [IDX_BOARDLED_CHAR_CFG]  =
+    [IDX_RGB_CHAR_CFG]  =
     { {ESP_GATT_AUTO_RSP}, 
       { 
         ESP_UUID_LEN_16, 
@@ -539,22 +577,39 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_READ_EVT");
             break;
         case ESP_GATTS_WRITE_EVT: {
-            ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT, handle: %d boardled_handle: %d", param->write.handle, led_handle_table[IDX_BOARDLED_CHAR_VAL]);
+            uint8_t* val = param->write.value;
+
+            ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT, handle: %d boardled_handle: %d", param->write.handle, led_handle_table[IDX_RGB_CHAR_VAL]);
             esp_log_buffer_hex(GATTS_TABLE_TAG, param->write.value, param->write.len);
+            printf("length: %d\noffset: %d\nval[0]: %X val[1]: %X val[2]: %X\n", (param->write.len), (param->write.offset), val[0], val[1], val[2]);
             
-            if(param->write.handle == led_handle_table[IDX_BOARDLED_CHAR_VAL]) {
-                if(*(param->write.value) == 1) {
-                  printf("Turning on the LED\n");
-                  gpio_set_level(BLINK_GPIO, 1);
-                }
-                else if(*(param->write.value) == 0) {
-                  printf("Turning off the LED\n");
-                  gpio_set_level(BLINK_GPIO, 0); 
-                }
-                else { /* default to off */
-                  printf("Default to LED off\n");
-                  gpio_set_level(BLINK_GPIO, 0); 
-                }
+            if(param->write.handle == led_handle_table[IDX_RGB_CHAR_VAL]) {
+              // color values will come in as 3-byte hex value: 0xffffff
+              // where the MSB is red, middle byte is green, and LSB is blue
+              setRedLED(val[0]);
+              setGreenLED(val[1]);
+              setBlueLED(val[2]);
+
+              switch(val[0]) {
+                case '1':
+                  printf("Board LED\n");
+                  
+                  run_leds();
+                break;
+                case 'r':
+                  printf("Red\n");
+                  setRedLED(8000);
+                break;
+                case 'g':
+                  printf("Green\n");
+                  setGreenLED(4000);
+                break;
+                case 'b':
+                  printf("Blue\n");
+                  setBlueLED(4000);
+                break;
+              }
+
             }
 
             break;
@@ -674,15 +729,16 @@ void app_main(void)
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
-    // configure GPIO connected to onboard LED (GPIO2 is default)
-    gpio_pad_select_gpio(BLINK_GPIO);
-    /* Set the GPIO as a push/pull output */
-    ret = gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
-    if(ret) {
-      ESP_LOGE(GATTS_TABLE_TAG, "%s set gpio direction failed: %s", __func__, esp_err_to_name(ret));
-      return;
-    }
-    printf("BLINK_GPIO set to %d\n", BLINK_GPIO);
+    led_init();
+    // // configure GPIO connected to onboard LED (GPIO2 is default)
+    // gpio_pad_select_gpio(BLINK_GPIO);
+    // /* Set the GPIO as a push/pull output */
+    // ret = gpio_set_direction(BLINK_GPIO, GPIO_MODE_INPUT_OUTPUT);
+    // if(ret) {
+    //   ESP_LOGE(GATTS_TABLE_TAG, "%s set gpio direction failed: %s", __func__, esp_err_to_name(ret));
+    //   return;
+    // }
+    // printf("BLINK_GPIO set to %d\n", BLINK_GPIO);
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ret = esp_bt_controller_init(&bt_cfg);
@@ -759,7 +815,150 @@ void app_main(void)
      * vTaskDelay(30000 / portTICK_PERIOD_MS);
      * remove_all_bonded_devices();
      */
+
+    int ch;
+
+
+    printf("1. LEDC fade up to duty = %d\n", LEDC_DUTY_CYCLE);
+    for (ch = 0; ch < LEDC_NUM_CHANNELS; ch++) {
+        ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, LEDC_DUTY_CYCLE);
+        ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
+        printf("ch: %d ledc_channel: %d\n", ch, ledc_channel[ch].channel);
+    }
+    
 }
 
 
+static void led_init(void) {
+  int ch;
 
+    /*
+     * Prepare and set configuration of timers
+     * that will be used by LED Controller
+     */
+    ledc_timer_config_t ledc_timer = {
+        .duty_resolution = LEDC_TIMER_13_BIT, // resolution of PWM duty
+        .freq_hz = 5000,                      // frequency of PWM signal
+        .speed_mode = LEDC_LS_MODE,           // timer mode
+        .timer_num = LEDC_LS_TIMER,            // timer index
+        .clk_cfg = LEDC_AUTO_CLK,              // Auto select the source clock
+    };
+    // Set configuration of timer0 for high speed channels
+    ledc_timer_config(&ledc_timer);
+#ifdef CONFIG_IDF_TARGET_ESP32
+    // Prepare and set configuration of timer1 for low speed channels
+    ledc_timer.speed_mode = LEDC_HS_MODE;
+    ledc_timer.timer_num = LEDC_HS_TIMER;
+    ledc_timer_config(&ledc_timer);
+#endif
+    /*
+     * Prepare individual configuration
+     * for each channel of LED Controller
+     * by selecting:
+     * - controller's channel number
+     * - output duty cycle, set initially to 0
+     * - GPIO number where LED is connected to
+     * - speed mode, either high or low
+     * - timer servicing selected channel
+     *   Note: if different channels use one timer,
+     *         then frequency and bit_num of these channels
+     *         will be the same
+     */
+    ledc_channel[LEDC_ONBOARD_IDX].channel    = LEDC_ONBOARD_CHANNEL;
+            ledc_channel[LEDC_ONBOARD_IDX].duty       = 0;
+            ledc_channel[LEDC_ONBOARD_IDX].gpio_num   = LEDC_ONBOARD;
+            ledc_channel[LEDC_ONBOARD_IDX].speed_mode = LEDC_HS_MODE;
+            ledc_channel[LEDC_ONBOARD_IDX].hpoint     = 0;
+            ledc_channel[LEDC_ONBOARD_IDX].timer_sel  = LEDC_HS_TIMER;
+    
+    ledc_channel[LEDC_BLUE_IDX].channel    = LEDC_BLUE_CHANNEL;
+            ledc_channel[LEDC_BLUE_IDX].duty       = 0;
+            ledc_channel[LEDC_BLUE_IDX].gpio_num   = LEDC_BLUE;
+            ledc_channel[LEDC_BLUE_IDX].speed_mode = LEDC_HS_MODE;
+            ledc_channel[LEDC_BLUE_IDX].hpoint     = 0;
+            ledc_channel[LEDC_BLUE_IDX].timer_sel  = LEDC_HS_TIMER;
+        
+        ledc_channel[LEDC_RED_IDX].channel    = LEDC_RED_CHANNEL;
+            ledc_channel[LEDC_RED_IDX].duty       = 0;
+            ledc_channel[LEDC_RED_IDX].gpio_num   = LEDC_RED;
+            ledc_channel[LEDC_RED_IDX].speed_mode = LEDC_LS_MODE;
+            ledc_channel[LEDC_RED_IDX].hpoint     = 0;
+            ledc_channel[LEDC_RED_IDX].timer_sel  = LEDC_LS_TIMER;
+        
+        ledc_channel[LEDC_GREEN_IDX].channel    = LEDC_GREEN_CHANNEL;
+            ledc_channel[LEDC_GREEN_IDX].duty       = 0;
+            ledc_channel[LEDC_GREEN_IDX].gpio_num   = LEDC_GREEN;
+            ledc_channel[LEDC_GREEN_IDX].speed_mode = LEDC_HS_MODE;
+            ledc_channel[LEDC_GREEN_IDX].hpoint     = 0;
+            ledc_channel[LEDC_GREEN_IDX].timer_sel  = LEDC_HS_TIMER;
+        
+
+    // Set LED Controller with previously prepared configuration
+    for (ch = 0; ch < LEDC_NUM_CHANNELS; ch++) {
+        ledc_channel_config(&ledc_channel[ch]);
+    }
+
+    // Initialize fade service.
+    ledc_fade_func_install(0);
+
+}
+
+void setRedLED(uint32_t colorByte) {
+  ledc_set_duty(ledc_channel[LEDC_RED_CHANNEL].speed_mode, ledc_channel[LEDC_RED_CHANNEL].channel, get_duty_cycle(colorByte));
+  ledc_update_duty(ledc_channel[LEDC_RED_CHANNEL].speed_mode, ledc_channel[LEDC_RED_CHANNEL].channel);
+  printf("Red LED set\n");
+}
+
+void setGreenLED(uint32_t colorByte) {
+  ledc_set_duty(ledc_channel[LEDC_GREEN_CHANNEL].speed_mode, ledc_channel[LEDC_GREEN_CHANNEL].channel, get_duty_cycle(colorByte));
+  ledc_update_duty(ledc_channel[LEDC_GREEN_CHANNEL].speed_mode, ledc_channel[LEDC_GREEN_CHANNEL].channel);
+  printf("Green LED set\n");
+}
+
+void setBlueLED(uint32_t colorByte) {
+  ledc_set_duty(ledc_channel[LEDC_BLUE_CHANNEL].speed_mode, ledc_channel[LEDC_BLUE_CHANNEL].channel, get_duty_cycle(colorByte));
+  ledc_update_duty(ledc_channel[LEDC_BLUE_CHANNEL].speed_mode, ledc_channel[LEDC_BLUE_CHANNEL].channel);
+  printf("Blue LED set\n");
+}
+
+uint32_t get_duty_cycle(uint32_t colorByte) {
+  uint32_t duty_coefficient = pow(2,LEDC_DUTY_RESOLUTION) / 0xff;
+  uint32_t duty = duty_coefficient*colorByte;
+  printf("duty cycle: %d\n", duty);
+  return duty;
+}
+
+void run_leds(void) {
+  int ch;
+
+  printf("1. LEDC fade up to duty = %d\n", LEDC_DUTY_CYCLE);
+  for (ch = 0; ch < LEDC_NUM_CHANNELS; ch++) {
+      ledc_set_fade_with_time(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, LEDC_DUTY_CYCLE, LEDC_FADE_TIME);
+      ledc_fade_start(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, LEDC_FADE_NO_WAIT);
+      printf("ch: %d ledc_channel: %d\n", ch, ledc_channel[ch].channel);
+  }
+  vTaskDelay(LEDC_FADE_TIME / portTICK_PERIOD_MS);
+
+  printf("2. LEDC fade down to duty = 0\n");
+  for (ch = 0; ch < LEDC_NUM_CHANNELS; ch++) {
+      ledc_set_fade_with_time(ledc_channel[ch].speed_mode,
+              ledc_channel[ch].channel, 0, LEDC_FADE_TIME);
+      ledc_fade_start(ledc_channel[ch].speed_mode,
+              ledc_channel[ch].channel, LEDC_FADE_NO_WAIT);
+  }
+  vTaskDelay(LEDC_FADE_TIME / portTICK_PERIOD_MS);
+
+  printf("3. LEDC set duty = %d without fade\n", LEDC_DUTY_CYCLE);
+  for (ch = 0; ch < LEDC_NUM_CHANNELS; ch++) {
+      ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, LEDC_DUTY_CYCLE);
+      ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
+  }
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+  printf("4. LEDC set duty = 0 without fade\n");
+  for (ch = 0; ch < LEDC_NUM_CHANNELS; ch++) {
+      ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, 0);
+      ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
+  }
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
+}

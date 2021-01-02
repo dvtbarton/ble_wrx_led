@@ -9,6 +9,6 @@
   },
   "C_Cpp.intelliSenseEngineFallback": "Enabled",
   "idf.portWin": "COM3",
-  "python.pythonPath": "C:\\Python38\\python.exe",
+  "python.pythonPath": "C:/Python38/python.exe",
   "idf.adapterTargetName": "esp32"
 }
